@@ -4,7 +4,14 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QFont
 
-from api_client import ApiClient
+from api_client import (
+    ApiClient,
+    ServerUnreachableError,
+    ServerTimeoutError,
+    InvalidCredentialsError,
+    ServiceUnavailableError,
+    ServerError,
+)
 
 
 class LoginWindow(QWidget):
@@ -88,7 +95,32 @@ class LoginWindow(QWidget):
             return
         try:
             user = self.api.login(username, password)
-        except Exception:
+        except InvalidCredentialsError:
             QMessageBox.critical(self, "Login failed", "Invalid username or password.")
+            return
+        except ServerUnreachableError:
+            QMessageBox.critical(
+                self, "Server unavailable",
+                f"Can't reach the eQueue server at {self.api.base_url}.\n\n"
+                "Make sure the server is running, or check the server URL."
+            )
+            return
+        except ServerTimeoutError:
+            QMessageBox.critical(
+                self, "Connection timed out",
+                "The server didn't respond in time. It may be overloaded or unreachable."
+            )
+            return
+        except ServiceUnavailableError as e:
+            QMessageBox.critical(
+                self, "Database unavailable",
+                f"The server is running but can't reach its database.\n\n{e}"
+            )
+            return
+        except ServerError as e:
+            QMessageBox.critical(self, "Unexpected server error", str(e))
+            return
+        except Exception as e:
+            QMessageBox.critical(self, "Unexpected error", str(e))
             return
         self.on_login_success(user)

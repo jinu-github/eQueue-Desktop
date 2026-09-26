@@ -3,10 +3,11 @@ from PyQt6.QtWidgets import QApplication
 
 from ui.login_window import LoginWindow
 from ui.reception_dashboard import ReceptionDashboard
+from ui.staff_dashboard import StaffDashboard
 
-# NOTE: staff_dashboard.py and admin_dashboard.py follow the same pattern
-# as reception_dashboard.py — sidebar + role-colored accent + live queue.
-# Scaffold those next once the reception flow is confirmed to work end to end.
+# NOTE: admin_dashboard.py still follows the same pattern as the other
+# dashboards — sidebar + role-colored accent + live queue. Scaffold it
+# next once the staff flow is confirmed to work end to end.
 
 
 class AppController:
@@ -26,9 +27,7 @@ class AppController:
         if role == "receptionist":
             self.window = ReceptionDashboard(user)
         elif role == "staff":
-            # from ui.staff_dashboard import StaffDashboard
-            # self.window = StaffDashboard(user)
-            self.window = ReceptionDashboard(user)  # placeholder until staff view is built
+            self.window = StaffDashboard(user)
         elif role == "admin":
             # from ui.admin_dashboard import AdminDashboard
             # self.window = AdminDashboard(user)

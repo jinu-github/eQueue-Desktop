@@ -63,3 +63,7 @@ async def websocket_endpoint(websocket: WebSocket):
             await websocket.receive_text()  # clients don't need to send anything
     except WebSocketDisconnect:
         manager.disconnect(websocket)
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="127.0.0.1", port=8000)

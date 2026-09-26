@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import SQLAlchemyError
 from pydantic import BaseModel
 from typing import Optional
 import hashlib
@@ -30,7 +31,13 @@ class UserCreate(BaseModel):
 
 @router.post("/login")
 def login(payload: LoginRequest, db: Session = Depends(get_db)):
-    user = db.query(models.User).filter(models.User.username == payload.username).first()
+    try:
+        user = db.query(models.User).filter(models.User.username == payload.username).first()
+    except SQLAlchemyError:
+        # DB unreachable / connection refused / table missing, etc. Distinct from
+        # "wrong credentials" so the client can show an accurate message.
+        raise HTTPException(503, "Database unavailable")
+
     if not user or user.password_hash != hash_password(payload.password) or not user.active:
         raise HTTPException(401, "Invalid username or password")
     return {

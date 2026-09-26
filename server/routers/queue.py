@@ -21,6 +21,28 @@ class QueueCreate(BaseModel):
     temperature: Optional[str] = None
 
 
+def _serialize_entry(entry: models.QueueEntry) -> dict:
+    """Include display-friendly names alongside the raw FKs so the UI
+    doesn't need a round trip per card to show who a queue entry is for."""
+    return {
+        "id": entry.id,
+        "patient_id": entry.patient_id,
+        "patient_name": f"{entry.patient.first_name} {entry.patient.last_name}" if entry.patient else None,
+        "department_id": entry.department_id,
+        "department_name": entry.department.name if entry.department else None,
+        "staff_id": entry.staff_id,
+        "staff_name": entry.staff.full_name if entry.staff else None,
+        "queue_number": entry.queue_number,
+        "status": entry.status,
+        "reason_for_visit": entry.reason_for_visit,
+        "blood_pressure": entry.blood_pressure,
+        "temperature": entry.temperature,
+        "check_in_time": entry.check_in_time,
+        "started_at": entry.started_at,
+        "completed_at": entry.completed_at,
+    }
+
+
 def _next_queue_number(db: Session, department_id: int) -> int:
     """Daily queue number per department, resetting each day."""
     today_start = datetime.combine(date.today(), datetime.min.time())
@@ -40,7 +62,8 @@ def list_queue(department_id: Optional[int] = None, db: Session = Depends(get_db
     q = db.query(models.QueueEntry)
     if department_id:
         q = q.filter(models.QueueEntry.department_id == department_id)
-    return q.order_by(models.QueueEntry.queue_number.asc()).all()
+    entries = q.order_by(models.QueueEntry.queue_number.asc()).all()
+    return [_serialize_entry(e) for e in entries]
 
 
 @router.post("/")
@@ -60,12 +83,18 @@ async def create_queue_entry(payload: QueueCreate, db: Session = Depends(get_db)
     db.refresh(entry)
 
     await manager.broadcast("queue_created", {"id": entry.id, "department_id": entry.department_id})
-    return entry
+    return _serialize_entry(entry)
 
 
 class StatusUpdate(BaseModel):
     status: str  # waiting | in_consultation | done | cancelled | no_show
     staff_id: Optional[int] = None
+    # Optional optimistic-concurrency guard: the status the client believes
+    # the entry is currently in. If another staff member changed it first
+    # (e.g. two people both hit "Start" on the same waiting patient), this
+    # will no longer match and the request is rejected with 409 instead of
+    # silently overwriting whatever the other person just did.
+    expected_status: Optional[str] = None
 
 
 @router.patch("/{entry_id}/status")
@@ -73,6 +102,13 @@ async def update_status(entry_id: int, payload: StatusUpdate, db: Session = Depe
     entry = db.query(models.QueueEntry).get(entry_id)
     if not entry:
         raise HTTPException(404, "Queue entry not found")
+
+    if payload.expected_status is not None and entry.status != payload.expected_status:
+        raise HTTPException(
+            409,
+            f"This entry is already '{entry.status}' (expected '{payload.expected_status}'). "
+            "Someone else may have just updated it — refresh and try again.",
+        )
 
     if payload.status == "in_consultation":
         # enforce: only one patient "in_consultation" per staff at a time
@@ -105,4 +141,4 @@ async def update_status(entry_id: int, payload: StatusUpdate, db: Session = Depe
         "queue_updated",
         {"id": entry.id, "status": entry.status, "department_id": entry.department_id},
     )
-    return entry
+    return _serialize_entry(entry)
