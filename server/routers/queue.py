@@ -8,6 +8,8 @@ from datetime import datetime, date
 from db.database import get_db
 from db import models
 from websocket_manager import manager
+from notifications import notify, notify_next_in_line
+from audit import log_action
 
 router = APIRouter(prefix="/queue", tags=["queue"])
 
@@ -19,28 +21,7 @@ class QueueCreate(BaseModel):
     reason_for_visit: Optional[str] = None
     blood_pressure: Optional[str] = None
     temperature: Optional[str] = None
-
-
-def _serialize_entry(entry: models.QueueEntry) -> dict:
-    """Include display-friendly names alongside the raw FKs so the UI
-    doesn't need a round trip per card to show who a queue entry is for."""
-    return {
-        "id": entry.id,
-        "patient_id": entry.patient_id,
-        "patient_name": f"{entry.patient.first_name} {entry.patient.last_name}" if entry.patient else None,
-        "department_id": entry.department_id,
-        "department_name": entry.department.name if entry.department else None,
-        "staff_id": entry.staff_id,
-        "staff_name": entry.staff.full_name if entry.staff else None,
-        "queue_number": entry.queue_number,
-        "status": entry.status,
-        "reason_for_visit": entry.reason_for_visit,
-        "blood_pressure": entry.blood_pressure,
-        "temperature": entry.temperature,
-        "check_in_time": entry.check_in_time,
-        "started_at": entry.started_at,
-        "completed_at": entry.completed_at,
-    }
+    registered_by_id: Optional[int] = None  # for the audit log
 
 
 def _next_queue_number(db: Session, department_id: int) -> int:
@@ -57,13 +38,32 @@ def _next_queue_number(db: Session, department_id: int) -> int:
     return count + 1
 
 
+def _serialize(entry: models.QueueEntry) -> dict:
+    patient = entry.patient
+    return {
+        "id": entry.id,
+        "patient_id": entry.patient_id,
+        "patient_name": f"{patient.first_name} {patient.last_name}" if patient else None,
+        "department_id": entry.department_id,
+        "staff_id": entry.staff_id,
+        "queue_number": entry.queue_number,
+        "status": entry.status,
+        "reason_for_visit": entry.reason_for_visit,
+        "blood_pressure": entry.blood_pressure,
+        "temperature": entry.temperature,
+        "check_in_time": entry.check_in_time.isoformat() if entry.check_in_time else None,
+        "started_at": entry.started_at.isoformat() if entry.started_at else None,
+        "completed_at": entry.completed_at.isoformat() if entry.completed_at else None,
+    }
+
+
 @router.get("/")
 def list_queue(department_id: Optional[int] = None, db: Session = Depends(get_db)):
     q = db.query(models.QueueEntry)
     if department_id:
         q = q.filter(models.QueueEntry.department_id == department_id)
     entries = q.order_by(models.QueueEntry.queue_number.asc()).all()
-    return [_serialize_entry(e) for e in entries]
+    return [_serialize(e) for e in entries]
 
 
 @router.post("/")
@@ -82,19 +82,22 @@ async def create_queue_entry(payload: QueueCreate, db: Session = Depends(get_db)
     db.commit()
     db.refresh(entry)
 
+    patient = entry.patient
+    dept = db.query(models.Department).get(payload.department_id)
+    log_action(
+        db, payload.registered_by_id, "Registered patient",
+        target=f"{patient.first_name} {patient.last_name} -> {dept.name if dept else '?'} (#{entry.queue_number})"
+    )
+
+    notify(db, entry, "welcome")
     await manager.broadcast("queue_created", {"id": entry.id, "department_id": entry.department_id})
-    return _serialize_entry(entry)
+    return _serialize(entry)
 
 
 class StatusUpdate(BaseModel):
     status: str  # waiting | in_consultation | done | cancelled | no_show
     staff_id: Optional[int] = None
-    # Optional optimistic-concurrency guard: the status the client believes
-    # the entry is currently in. If another staff member changed it first
-    # (e.g. two people both hit "Start" on the same waiting patient), this
-    # will no longer match and the request is rejected with 409 instead of
-    # silently overwriting whatever the other person just did.
-    expected_status: Optional[str] = None
+    expected_status: Optional[str] = None  # optimistic-concurrency guard
 
 
 @router.patch("/{entry_id}/status")
@@ -106,12 +109,10 @@ async def update_status(entry_id: int, payload: StatusUpdate, db: Session = Depe
     if payload.expected_status is not None and entry.status != payload.expected_status:
         raise HTTPException(
             409,
-            f"This entry is already '{entry.status}' (expected '{payload.expected_status}'). "
-            "Someone else may have just updated it — refresh and try again.",
+            f"This entry was already changed to '{entry.status}' by someone else.",
         )
 
     if payload.status == "in_consultation":
-        # enforce: only one patient "in_consultation" per staff at a time
         staff_id = payload.staff_id or entry.staff_id
         if staff_id:
             busy = (
@@ -137,8 +138,21 @@ async def update_status(entry_id: int, payload: StatusUpdate, db: Session = Depe
     db.commit()
     db.refresh(entry)
 
+    log_action(
+        db, payload.staff_id, f"Changed queue status to '{payload.status}'",
+        target=f"#{entry.queue_number} ({entry.patient.first_name} {entry.patient.last_name})" if entry.patient else f"#{entry.queue_number}"
+    )
+
+    if payload.status == "in_consultation":
+        notify(db, entry, "your_turn")
+    elif payload.status == "no_show":
+        notify(db, entry, "missed")
+
+    if payload.status in ("in_consultation", "done", "cancelled", "no_show"):
+        notify_next_in_line(db, entry.department_id, entry.id)
+
     await manager.broadcast(
         "queue_updated",
         {"id": entry.id, "status": entry.status, "department_id": entry.department_id},
     )
-    return _serialize_entry(entry)
+    return _serialize(entry)

@@ -104,3 +104,16 @@ class AuditLog(Base):
     action = Column(String(100), nullable=False)
     target = Column(String(200), nullable=True)
     timestamp = Column(DateTime, default=datetime.utcnow)
+
+
+class SmsSettings(Base):
+    """Single-row table (id is always 1) holding the live SMS provider
+    config, editable from the admin dashboard without touching the server
+    machine. Seeded from .env on first startup; after that, this table is
+    the source of truth."""
+    __tablename__ = "sms_settings"
+
+    id = Column(Integer, primary_key=True, default=1)
+    provider = Column(String(20), default="console")  # console | semaphore | iprog
+    api_key = Column(String(255), default="")
+    sender_name = Column(String(50), default="eQueue")

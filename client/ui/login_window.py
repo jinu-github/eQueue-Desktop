@@ -12,6 +12,8 @@ from api_client import (
     ServiceUnavailableError,
     ServerError,
 )
+from async_worker import run_async
+from theme import Color, PRIMARY_BTN_STYLE
 
 
 class LoginWindow(QWidget):
@@ -21,7 +23,7 @@ class LoginWindow(QWidget):
         self.on_login_success = on_login_success
         self.setWindowTitle("eQueue — Sign in")
         self.setFixedSize(420, 480)
-        self.setStyleSheet("background-color: #0f172a;")
+        self.setStyleSheet(f"background-color: {Color.WINDOW_BG};")
         self._build_ui()
 
     def _build_ui(self):
@@ -29,8 +31,8 @@ class LoginWindow(QWidget):
         outer.setContentsMargins(40, 60, 40, 40)
 
         card = QFrame()
-        card.setStyleSheet("""
-            QFrame { background-color: #1e293b; border-radius: 16px; }
+        card.setStyleSheet(f"""
+            QFrame {{ background-color: {Color.PANEL_BG}; border-radius: 16px; }}
         """)
         card_layout = QVBoxLayout(card)
         card_layout.setContentsMargins(32, 32, 32, 32)
@@ -38,9 +40,9 @@ class LoginWindow(QWidget):
 
         title = QLabel("eQueue")
         title.setFont(QFont("Segoe UI", 26, QFont.Weight.Bold))
-        title.setStyleSheet("color: #f8fafc;")
+        title.setStyleSheet(f"color: {Color.TEXT_PRIMARY};")
         subtitle = QLabel("Queue management, reimagined")
-        subtitle.setStyleSheet("color: #94a3b8; margin-bottom: 16px;")
+        subtitle.setStyleSheet(f"color: {Color.TEXT_SECONDARY}; margin-bottom: 16px;")
 
         self.username_input = QLineEdit()
         self.username_input.setPlaceholderText("Username")
@@ -49,33 +51,24 @@ class LoginWindow(QWidget):
         self.password_input.setEchoMode(QLineEdit.EchoMode.Password)
 
         for field in (self.username_input, self.password_input):
-            field.setStyleSheet("""
-                QLineEdit {
-                    background-color: #0f172a;
-                    color: #f8fafc;
-                    border: 1px solid #334155;
+            field.setStyleSheet(f"""
+                QLineEdit {{
+                    background-color: {Color.WINDOW_BG};
+                    color: {Color.TEXT_PRIMARY};
+                    border: 1px solid {Color.BORDER};
                     border-radius: 8px;
                     padding: 10px 12px;
                     font-size: 14px;
-                }
-                QLineEdit:focus { border: 1px solid #3b82f6; }
+                }}
+                QLineEdit:focus {{ border: 1px solid {Color.BLUE}; }}
             """)
             field.setMinimumHeight(40)
 
-        login_btn = QPushButton("Sign in")
-        login_btn.setMinimumHeight(42)
-        login_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        login_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #3b82f6;
-                color: white;
-                border-radius: 8px;
-                font-weight: 600;
-                font-size: 14px;
-            }
-            QPushButton:hover { background-color: #2563eb; }
-        """)
-        login_btn.clicked.connect(self._handle_login)
+        self.login_btn = QPushButton("Sign in")
+        self.login_btn.setMinimumHeight(42)
+        self.login_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.login_btn.setStyleSheet(PRIMARY_BTN_STYLE)
+        self.login_btn.clicked.connect(self._handle_login)
         self.password_input.returnPressed.connect(self._handle_login)
 
         card_layout.addWidget(title)
@@ -83,7 +76,7 @@ class LoginWindow(QWidget):
         card_layout.addWidget(self.username_input)
         card_layout.addWidget(self.password_input)
         card_layout.addSpacing(8)
-        card_layout.addWidget(login_btn)
+        card_layout.addWidget(self.login_btn)
 
         outer.addWidget(card)
 
@@ -93,34 +86,45 @@ class LoginWindow(QWidget):
         if not username or not password:
             QMessageBox.warning(self, "Missing info", "Enter both username and password.")
             return
-        try:
-            user = self.api.login(username, password)
-        except InvalidCredentialsError:
+
+        self._set_loading(True)
+        self._login_worker = run_async(
+            lambda: self.api.login(username, password),
+            on_success=self._on_login_success,
+            on_error=self._on_login_error,
+        )
+
+    def _set_loading(self, loading: bool):
+        self.username_input.setEnabled(not loading)
+        self.password_input.setEnabled(not loading)
+        self.login_btn.setEnabled(not loading)
+        self.login_btn.setText("Signing in…" if loading else "Sign in")
+
+    def _on_login_success(self, user: dict):
+        self._set_loading(False)
+        self.on_login_success(user)
+
+    def _on_login_error(self, error: Exception):
+        self._set_loading(False)
+        if isinstance(error, InvalidCredentialsError):
             QMessageBox.critical(self, "Login failed", "Invalid username or password.")
-            return
-        except ServerUnreachableError:
+        elif isinstance(error, ServerUnreachableError):
             QMessageBox.critical(
                 self, "Server unavailable",
                 f"Can't reach the eQueue server at {self.api.base_url}.\n\n"
                 "Make sure the server is running, or check the server URL."
             )
-            return
-        except ServerTimeoutError:
+        elif isinstance(error, ServerTimeoutError):
             QMessageBox.critical(
                 self, "Connection timed out",
                 "The server didn't respond in time. It may be overloaded or unreachable."
             )
-            return
-        except ServiceUnavailableError as e:
+        elif isinstance(error, ServiceUnavailableError):
             QMessageBox.critical(
                 self, "Database unavailable",
-                f"The server is running but can't reach its database.\n\n{e}"
+                f"The server is running but can't reach its database.\n\n{error}"
             )
-            return
-        except ServerError as e:
-            QMessageBox.critical(self, "Unexpected server error", str(e))
-            return
-        except Exception as e:
-            QMessageBox.critical(self, "Unexpected error", str(e))
-            return
-        self.on_login_success(user)
+        elif isinstance(error, ServerError):
+            QMessageBox.critical(self, "Unexpected server error", str(error))
+        else:
+            QMessageBox.critical(self, "Unexpected error", str(error))

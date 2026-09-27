@@ -1,0 +1,5 @@
+server/.env
+*.pyc
+__pycache__/
+*.db
+.equeue_client_settings.json

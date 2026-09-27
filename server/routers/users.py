@@ -7,6 +7,7 @@ import hashlib
 
 from db.database import get_db
 from db import models
+from audit import log_action
 
 router = APIRouter(prefix="/users", tags=["users"])
 
@@ -27,6 +28,7 @@ class UserCreate(BaseModel):
     full_name: str
     role: str
     department_id: Optional[int] = None
+    created_by_id: Optional[int] = None  # who's creating this account, for the audit log
 
 
 @router.post("/login")
@@ -40,6 +42,8 @@ def login(payload: LoginRequest, db: Session = Depends(get_db)):
 
     if not user or user.password_hash != hash_password(payload.password) or not user.active:
         raise HTTPException(401, "Invalid username or password")
+    
+    log_action(db, user.id, "Logged in", target=user.username)
     return {
         "id": user.id,
         "username": user.username,
@@ -64,6 +68,8 @@ def create_user(payload: UserCreate, db: Session = Depends(get_db)):
     db.add(user)
     db.commit()
     db.refresh(user)
+
+    log_action(db, payload.created_by_id, "Created account", target=f"{user.username} ({user.role})")
     return {"id": user.id, "username": user.username, "role": user.role}
 
 

@@ -4,6 +4,7 @@ import requests
 import sys, os
 sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
 from shared.constants import DEFAULT_SERVER_URL
+from local_settings import load_settings
 
 # Every request gets this timeout so the UI never just hangs when the
 # server is up but not responding (as opposed to refusing the connection
@@ -44,8 +45,8 @@ class ServerError(ApiError):
 
 
 class ApiClient:
-    def __init__(self, base_url: str = DEFAULT_SERVER_URL):
-        self.base_url = base_url.rstrip("/")
+    def __init__(self, base_url: str = None):
+        self.base_url = (base_url or load_settings()["server_url"]).rstrip("/")
 
     def _request(self, method: str, path: str, **kwargs) -> dict:
         """Shared request path: consistent timeout + typed exceptions for
@@ -72,18 +73,19 @@ class ApiClient:
 
         return r.json() if r.content else {}
 
+    # --- auth ---------------------------------------------------------
+
     def login(self, username: str, password: str) -> dict:
         return self._request("POST", "/users/login", json={"username": username, "password": password})
 
-    def list_departments(self) -> list:
-        return self._request("GET", "/departments/")
+    # --- patients / queue ----------------------------------------------
+
+    def create_patient(self, patient_data: dict) -> dict:
+        return self._request("POST", "/patients/", json=patient_data)
 
     def list_queue(self, department_id: int = None) -> list:
         params = {"department_id": department_id} if department_id else {}
         return self._request("GET", "/queue/", params=params)
-
-    def create_patient(self, patient_data: dict) -> dict:
-        return self._request("POST", "/patients/", json=patient_data)
 
     def create_queue_entry(self, queue_data: dict) -> dict:
         return self._request("POST", "/queue/", json=queue_data)
@@ -92,6 +94,83 @@ class ApiClient:
         payload = {"status": status}
         if staff_id:
             payload["staff_id"] = staff_id
-        if expected_status:
+        if expected_status is not None:
             payload["expected_status"] = expected_status
         return self._request("PATCH", f"/queue/{entry_id}/status", json=payload)
+
+    # --- users ----------------------------------------------------------
+
+    def create_user(self, user_data: dict) -> dict:
+        return self._request("POST", "/users/", json=user_data)
+
+    def list_users(self) -> list:
+        return self._request("GET", "/users/")
+
+    # --- departments ------------------------------------------------------
+
+    def list_departments(self) -> list:
+        return self._request("GET", "/departments/")
+
+    def create_department(self, name: str, avg_consultation_minutes: int = 15, actor_id: int = None) -> dict:
+        payload = {"name": name, "avg_consultation_minutes": avg_consultation_minutes}
+        if actor_id is not None:
+            payload["actor_id"] = actor_id
+        return self._request("POST", "/departments/", json=payload)
+
+    def update_department(self, department_id: int, actor_id: int = None, **fields) -> dict:
+        if actor_id is not None:
+            fields["actor_id"] = actor_id
+        return self._request("PATCH", f"/departments/{department_id}", json=fields)
+
+    def delete_department(self, department_id: int, actor_id: int = None) -> dict:
+        params = {"actor_id": actor_id} if actor_id is not None else {}
+        return self._request("DELETE", f"/departments/{department_id}", params=params)
+
+    # --- SMS templates ------------------------------------------------------
+
+    def list_sms_templates(self, department_id: int = None) -> list:
+        params = {"department_id": department_id} if department_id else {}
+        return self._request("GET", "/sms-templates/", params=params)
+
+    def create_sms_template(self, department_id: int, template_type: str, content: str, actor_id: int = None) -> dict:
+        payload = {"department_id": department_id, "template_type": template_type, "content": content}
+        if actor_id is not None:
+            payload["actor_id"] = actor_id
+        return self._request("POST", "/sms-templates/", json=payload)
+
+    def update_sms_template(self, template_id: int, content: str, actor_id: int = None) -> dict:
+        payload = {"content": content}
+        if actor_id is not None:
+            payload["actor_id"] = actor_id
+        return self._request("PATCH", f"/sms-templates/{template_id}", json=payload)
+
+    def delete_sms_template(self, template_id: int, actor_id: int = None) -> dict:
+        params = {"actor_id": actor_id} if actor_id is not None else {}
+        return self._request("DELETE", f"/sms-templates/{template_id}", params=params)
+
+    # --- SMS provider settings ------------------------------------------
+
+    def get_sms_settings(self) -> dict:
+        return self._request("GET", "/sms-settings/")
+
+    def update_sms_settings(self, provider: str, api_key: str = None, sender_name: str = None, actor_id: int = None) -> dict:
+        payload = {"provider": provider}
+        if api_key:
+            payload["api_key"] = api_key
+        if sender_name is not None:
+            payload["sender_name"] = sender_name
+        if actor_id is not None:
+            payload["actor_id"] = actor_id
+        return self._request("PATCH", "/sms-settings/", json=payload)
+
+    def send_test_sms(self, phone_number: str) -> dict:
+        return self._request("POST", "/sms-settings/test", json={"phone_number": phone_number})
+
+    # --- reports & audit -------------------------------------------------
+
+    def get_daily_summary(self, report_date: str = None) -> dict:
+        params = {"report_date": report_date} if report_date else {}
+        return self._request("GET", "/reports/daily-summary", params=params)
+
+    def list_audit_logs(self, limit: int = 100) -> list:
+        return self._request("GET", "/audit-logs/", params={"limit": limit})

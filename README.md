@@ -41,6 +41,7 @@ pip install -r requirements.txt
 # Point at the server's LAN IP if not running on the same machine:
 #   export EQUEUE_SERVER_URL="http://192.168.1.10:8000"
 
+uvicorn main:app --host 127.0.0.1 --port 8000
 python main.py
 ```
 
