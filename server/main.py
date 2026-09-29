@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from db.database import Base, engine, SessionLocal
 from db import models
 from websocket_manager import manager
-from routers import patients, queue, users, departments, sms_templates, sms_logs, sms_settings, reports, audit_logs
+from routers import patients, queue, users, departments, sms_templates, sms_logs, sms_settings, reports, audit_logs, app_settings
 from routers.users import hash_password
 from sms_provider import ENV_DEFAULTS
 
@@ -29,6 +29,7 @@ app.include_router(sms_logs.router)
 app.include_router(sms_settings.router)
 app.include_router(reports.router)
 app.include_router(audit_logs.router)
+app.include_router(app_settings.router)
 
 @app.on_event("startup")
 def init_db():

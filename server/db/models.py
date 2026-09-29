@@ -117,3 +117,12 @@ class SmsSettings(Base):
     provider = Column(String(20), default="console")  # console | semaphore | iprog
     api_key = Column(String(255), default="")
     sender_name = Column(String(50), default="eQueue")
+
+class AppSettings(Base):
+    """Single-row table (id is always 1) holding shared app-wide
+    settings, editable from the admin dashboard - unlike server_url
+    which is genuinely per-machine, this applies to every staff client."""
+    __tablename__ = "app_settings"
+
+    id = Column(Integer, primary_key=True, default=1)
+    staff_poll_seconds = Column(Integer, default=3)

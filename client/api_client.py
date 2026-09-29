@@ -174,3 +174,14 @@ class ApiClient:
 
     def list_audit_logs(self, limit: int = 100) -> list:
         return self._request("GET", "/audit-logs/", params={"limit": limit})
+
+    # --- app settings (shared across all staff clients) --------------------
+
+    def get_app_settings(self) -> dict:
+        return self._request("GET", "/app-settings/")
+
+    def update_app_settings(self, staff_poll_seconds: int, actor_id: int = None) -> dict:
+        payload = {"staff_poll_seconds": staff_poll_seconds}
+        if actor_id is not None:
+            payload["actor_id"] = actor_id
+        return self._request("PATCH", "/app-settings/", json=payload)

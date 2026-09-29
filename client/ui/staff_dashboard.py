@@ -14,8 +14,10 @@ from async_worker import run_async
 from theme import Color, PRIMARY_BTN_STYLE, SECONDARY_BTN_STYLE, DANGER_SOLID_BTN_STYLE, SIDEBAR_STYLE, LOGOUT_BTN_STYLE, role_badge_style
 from ws_client import QueueWebSocketClient
 
-# How often the dashboard polls the server for queue changes.
-REFRESH_MS = 3000
+# Default poll interval as a fallback before the shared server setting loads
+# (see _load_poll_interval below).
+
+DEFAULT_REFRESH_MS = 3000
 
 
 def _fmt_time(value):
@@ -200,9 +202,19 @@ class StaffDashboard(QWidget):
         self._build_ui()
         self._lookup_department_name()
 
+        # Poll interval is a shared server-side setting (not a local file)
+        # so an admin's change applies to every staff dashboard, not just
+        # whichever machine the admin happens to be sitting at.
         self.timer = QTimer(self)
         self.timer.timeout.connect(self._silent_refresh)
-        self.timer.start(REFRESH_MS)
+        self.timer.start(DEFAULT_REFRESH_MS)
+        self._load_poll_interval()
+
+        # Re-check every 60s so a change made from Admin applies here
+        # without needing to restart this dashboard.
+        self.poll_interval_check_timer = QTimer(self)
+        self.poll_interval_check_timer.timeout.connect(self._load_poll_interval)
+        self.poll_interval_check_timer.start(60000)
 
         self._ws = QueueWebSocketClient(self.api.base_url)
         self._ws.message_received.connect(self._on_ws_message)
@@ -304,14 +316,29 @@ class StaffDashboard(QWidget):
 
     def _logout(self):
         self.timer.stop()
+        self.poll_interval_check_timer.stop()
         self._ws.stop()
         if self.on_logout:
             self.on_logout()
 
     def closeEvent(self, event):
         self.timer.stop()
+        self.poll_interval_check_timer.stop()
         self._ws.stop()
         super().closeEvent(event)
+
+    def _load_poll_interval(self):
+        self._poll_settings_worker = run_async(
+            self.api.get_app_settings,
+            on_success=self._on_poll_interval_loaded,
+            on_error=lambda e: None,  # keep current interval if server's briefly unreachable
+        )
+
+    def _on_poll_interval_loaded(self, settings: dict):
+        seconds = settings.get("staff_poll_seconds", 3)
+        new_interval_ms = seconds * 1000
+        if self.timer.interval() != new_interval_ms:
+            self.timer.setInterval(new_interval_ms)
 
     def _on_ws_message(self, data: dict):
         if data.get("event") not in ("queue_created", "queue_updated"):
