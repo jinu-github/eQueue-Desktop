@@ -16,7 +16,9 @@ class DepartmentPanel(QFrame):
     def __init__(self, department: dict):
         super().__init__()
         self.department_id = department["id"]
-        self.setStyleSheet(f"QFrame {{ background-color: {Color.PANEL_BG}; border-radius: 16px; }}")
+        self.setStyleSheet(f"background-color: {Color.WINDOW_BG};")
+        self.setWindowFlags(self.windowFlags() | Qt.WindowType.FramelessWindowHint)
+        self.showFullScreen()
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(28, 24, 28, 24)
